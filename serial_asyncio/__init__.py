@@ -10,13 +10,12 @@
 """\
 Support asyncio with serial ports.
 
-Posix platforms only, Python 3.5+ only.
+Python 3.5+ only.
 
-Windows event loops can not wait for serial ports with the current
-implementation. It should be possible to get that working though.
 """
 import asyncio
 import os
+from collections import deque
 
 import serial
 
@@ -25,18 +24,17 @@ try:
 except ImportError:
     termios = None
 
-__version__ = '0.4'
+__version__ = '0.5'
 
 
-class SerialTransport(asyncio.Transport):
-    """An asyncio transport model of a serial communication channel.
+class _BaseSerialTransport(asyncio.Transport):
+    """An abstract asyncio transport model of a serial communication channel.
 
     A transport class is an abstraction of a communication channel.
     This allows protocol implementations to be developed against the
     transport abstraction without needing to know the details of the
     underlying channel, such as whether it is a pipe, a socket, or
     indeed a serial port.
-
 
     You generally won’t instantiate a transport yourself; instead, you
     will call `create_serial_connection` which will create the
@@ -51,22 +49,12 @@ class SerialTransport(asyncio.Transport):
         self._serial = serial_instance
         self._closing = False
         self._protocol_paused = False
-        self._max_read_size = 1024
-        self._write_buffer = []
+        self._write_buffer = deque()
         self._set_write_buffer_limits()
-        self._has_reader = False
-        self._has_writer = False
-        self._poll_wait_time = 0.0005
 
         # XXX how to support url handlers too
 
-        # Asynchronous I/O requires non-blocking devices
-        self._serial.timeout = 0
-        self._serial.write_timeout = 0
-
-        # These two callbacks will be enqueued in a FIFO queue by asyncio
         loop.call_soon(protocol.connection_made, self)
-        loop.call_soon(self._ensure_reader)
 
     @property
     def loop(self):
@@ -109,30 +97,17 @@ class SerialTransport(asyncio.Transport):
         if not self._closing:
             self._close(None)
 
-    def _read_ready(self):
-        try:
-            data = self._serial.read(self._max_read_size)
-        except serial.SerialException as e:
-            self._close(exc=e)
-        else:
-            if data:
-                self._protocol.data_received(data)
-
     def write(self, data):
         """Write some data to the transport.
 
         This method does not block; it buffers the data and arranges
         for it to be sent out asynchronously.  Writes made after the
         transport has been closed will be ignored."""
-        if self._closing:
+        if self._closing or len(data) == 0:
             return
 
-        if self.get_write_buffer_size() == 0:
-            self._write_buffer.append(data)
-            self._ensure_writer()
-        else:
-            self._write_buffer.append(data)
-
+        self._write_buffer.append(bytes(data))
+        self._ensure_writer()
         self._maybe_pause_protocol()
 
     def can_write_eof(self):
@@ -239,48 +214,6 @@ class SerialTransport(asyncio.Transport):
                     'protocol': self._protocol,
                 })
 
-    def _write_ready(self):
-        """Asynchronously write buffered data.
-
-        This method is called back asynchronously as a writer
-        registered with the asyncio event-loop against the
-        underlying file descriptor for the serial port.
-
-        Should the write-buffer become empty if this method
-        is invoked while the transport is closing, the protocol's
-        connection_lost() method will be called with None as its
-        argument.
-        """
-        data = b''.join(self._write_buffer)
-        assert data, 'Write buffer should not be empty'
-
-        self._write_buffer.clear()
-
-        try:
-            n = self._serial.write(data)
-        except (BlockingIOError, InterruptedError):
-            self._write_buffer.append(data)
-        except serial.SerialException as exc:
-            self._fatal_error(exc, 'Fatal write error on serial transport')
-        else:
-            if n == len(data):
-                assert self._flushed()
-                self._remove_writer()
-                self._maybe_resume_protocol()  # May cause further writes
-                # _write_ready may have been invoked by the event loop
-                # after the transport was closed, as part of the ongoing
-                # process of flushing buffered data. If the buffer
-                # is now empty, we can close the connection
-                if self._closing and self._flushed():
-                    self._close()
-                return
-
-            assert 0 <= n < len(data)
-            data = data[n:]
-            self._write_buffer.append(data)  # Try again later
-            self._maybe_resume_protocol()
-            assert self._has_writer
-
     if os.name == "nt":
         def _poll_read(self):
             if self._has_reader:
@@ -305,11 +238,6 @@ class SerialTransport(asyncio.Transport):
                     self._loop.call_soon(self._write_ready)
                 self._loop.call_later(self._poll_wait_time, self._poll_write)
 
-        def _ensure_writer(self):
-            if (not self._has_writer) and (not self._closing):
-                self._loop.call_later(self._poll_wait_time, self._poll_write)
-                self._has_writer = True
-
         def _remove_writer(self):
             self._has_writer = False
 
@@ -324,10 +252,6 @@ class SerialTransport(asyncio.Transport):
                 self._loop.remove_reader(self._serial.fileno())
                 self._has_reader = False
 
-        def _ensure_writer(self):
-            if (not self._has_writer) and (not self._closing):
-                self._loop.add_writer(self._serial.fileno(), self._write_ready)
-                self._has_writer = True
 
         def _remove_writer(self):
             if self._has_writer:
@@ -504,6 +428,12 @@ async def open_serial_connection(*,
         **kwargs)
     writer = asyncio.StreamWriter(transport, protocol, reader, loop)
     return reader, writer
+
+
+if os.name == "nt":
+    from .win32 import SerialTransport
+else:
+    from .posix import SerialTransport
 
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
