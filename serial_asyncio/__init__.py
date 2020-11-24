@@ -323,8 +323,6 @@ class _BaseSerialTransport(asyncio.Transport):
         pending buffers and closes the serial connection.
         """
         assert self._closing
-        assert not self._has_writer
-        assert not self._has_reader
         try:
             self._serial.flush()
         except (serial.SerialException if os.name == "nt" else termios.error):
