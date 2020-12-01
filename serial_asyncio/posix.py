@@ -67,3 +67,16 @@ class SerialTransport(_BaseSerialTransport):
             self._write_buffer.append(data)  # Try again later
             self._maybe_resume_protocol()
             assert self._has_writer
+
+    def _close(self, exc=None):
+        self._closing = True
+        self._remove_reader()
+        if self._flushed():
+            self._remove_writer()
+            self._loop.call_soon(self._call_connection_lost, exc)
+
+    def pause_reading(self):
+        self._remove_reader()
+
+    def resume_reading(self):
+        self._ensure_reader()

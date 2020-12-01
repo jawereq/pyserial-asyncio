@@ -123,7 +123,7 @@ class _BaseSerialTransport(asyncio.Transport):
         No data will be passed to the protocol’s data_received() method
         until resume_reading() is called.
         """
-        self._remove_reader()
+        raise NotImplementedError("pause_reading() is abstract and not implemented")
 
     def resume_reading(self):
         """Resume the receiving end of the transport.
@@ -131,7 +131,7 @@ class _BaseSerialTransport(asyncio.Transport):
         Incoming data will be passed to the protocol's data_received()
         method until pause_reading() is called.
         """
-        self._ensure_reader()
+        raise NotImplementedError("resume_reading() is abstract and not implemented")
 
     def set_write_buffer_limits(self, high=None, low=None):
         """Set the high- and low-water limits for write flow control.
@@ -296,11 +296,7 @@ class _BaseSerialTransport(asyncio.Transport):
         method will call this _close method again when the
         buffer has been flushed completely.
         """
-        self._closing = True
-        self._remove_reader()
-        if self._flushed():
-            self._remove_writer()
-            self._loop.call_soon(self._call_connection_lost, exc)
+        raise raise NotImplementedError("_close() is abstract and not implemented")
 
     def _abort(self, exc):
         """Close the transport immediately.

@@ -8,6 +8,8 @@ class SerialTransport(_BaseSerialTransport):
         super().__init__(loop, protocol, serial_instance)
         self._write_task = None
         self._read_task = None
+        self._reading_paused = False
+        self._buffered_read_bytes = None
 
     def _ensure_writer(self):
         if self._write_task is None and len(self._write_buffer) > 0:
@@ -34,3 +36,31 @@ class SerialTransport(_BaseSerialTransport):
             else:
                 self._maybe_resume_protocol()
             self._ensure_writer()
+
+    def _close(self, exc=None):
+        """Close the transport gracefully.
+
+        If the write buffer is already empty, writing will be
+        stopped immediately and a call to the protocol's
+        connection_lost() method scheduled.
+
+        If the write buffer is not already empty, the
+        asynchronous writing will continue, and the _write_ready
+        method will call this _close method again when the
+        buffer has been flushed completely.
+        """
+        self._closing = True
+        if self._read_task:
+            self._read_task.cancel()
+        elif self._flushed():
+            assert self._write_task is None
+            self._loop.call_soon(self._call_connection_lost, exc)
+
+    def pause_reading(self):
+        self._reading_paused = True
+
+    def resume_reading(self):
+        if self._reading_paused:
+            if not self._closing:
+                pass
+            self._reading_paused = False
