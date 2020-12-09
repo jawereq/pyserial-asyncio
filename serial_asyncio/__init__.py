@@ -51,6 +51,7 @@ class _BaseSerialTransport(asyncio.Transport):
         self._protocol_paused = False
         self._write_buffer = deque()
         self._set_write_buffer_limits()
+        self._max_read_size = 1024
 
         # XXX how to support url handlers too
 
@@ -168,9 +169,7 @@ class _BaseSerialTransport(asyncio.Transport):
     def flush(self):
         """ clears output buffer and stops any more data being written
         """
-        self._remove_writer()
-        self._write_buffer.clear()
-        self._maybe_resume_protocol()
+        raise NotImplementedError("resume_reading() is abstract and not implemented")
 
     def _maybe_pause_protocol(self):
         """To be called whenever the write-buffer size increases.
@@ -214,50 +213,6 @@ class _BaseSerialTransport(asyncio.Transport):
                     'protocol': self._protocol,
                 })
 
-    if os.name == "nt":
-        def _poll_read(self):
-            if self._has_reader:
-                try:
-                    if self.serial.in_waiting:
-                        self._loop.call_soon(self._read_ready)
-                    self._loop.call_later(self._poll_wait_time, self._poll_read)
-                except serial.SerialException as exc:
-                    self._fatal_error(exc, 'Fatal write error on serial transport')
-
-        def _ensure_reader(self):
-            if (not self._has_reader) and (not self._closing):
-                self._loop.call_later(self._poll_wait_time, self._poll_read)
-                self._has_reader = True
-
-        def _remove_reader(self):
-            self._has_reader = False
-
-        def _poll_write(self):
-            if self._has_writer:
-                if self.serial.out_waiting:
-                    self._loop.call_soon(self._write_ready)
-                self._loop.call_later(self._poll_wait_time, self._poll_write)
-
-        def _remove_writer(self):
-            self._has_writer = False
-
-    else:
-        def _ensure_reader(self):
-            if (not self._has_reader) and (not self._closing):
-                self._loop.add_reader(self._serial.fileno(), self._read_ready)
-                self._has_reader = True
-
-        def _remove_reader(self):
-            if self._has_reader:
-                self._loop.remove_reader(self._serial.fileno())
-                self._has_reader = False
-
-
-        def _remove_writer(self):
-            if self._has_writer:
-                self._loop.remove_writer(self._serial.fileno())
-                self._has_writer = False
-
     def _set_write_buffer_limits(self, high=None, low=None):
         """Ensure consistent write-buffer limits."""
         if high is None:
@@ -296,7 +251,7 @@ class _BaseSerialTransport(asyncio.Transport):
         method will call this _close method again when the
         buffer has been flushed completely.
         """
-        raise raise NotImplementedError("_close() is abstract and not implemented")
+        raise NotImplementedError("_close() is abstract and not implemented")
 
     def _abort(self, exc):
         """Close the transport immediately.
@@ -307,10 +262,7 @@ class _BaseSerialTransport(asyncio.Transport):
         connection_lost() method will eventually be called with the
         passed exception.
         """
-        self._closing = True
-        self._remove_reader()
-        self._remove_writer()  # Pending buffered data will not be written
-        self._loop.call_soon(self._call_connection_lost, exc)
+        raise NotImplementedError("_abort() is abstract and not implemented")
 
     def _call_connection_lost(self, exc):
         """Close the connection.

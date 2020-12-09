@@ -2,7 +2,6 @@
 class SerialTransport(_BaseSerialTransport):
     def __init__(self, loop, protocol, serial_instance):
         super().__init__(loop, protocol, serial_instance)
-        self._max_read_size = 1024
         self._has_reader = False
         self._has_writer = False
 
@@ -74,6 +73,33 @@ class SerialTransport(_BaseSerialTransport):
         if self._flushed():
             self._remove_writer()
             self._loop.call_soon(self._call_connection_lost, exc)
+
+    def _abort(self, exc):
+        self._closing = True
+        self._remove_reader()
+        self._remove_writer()  # Pending buffered data will not be written
+        self._loop.call_soon(self._call_connection_lost, exc)
+
+    def flush(self):
+        self._remove_writer()
+        self._write_buffer.clear()
+        self._maybe_resume_protocol()
+
+    def _ensure_reader(self):
+        if (not self._has_reader) and (not self._closing):
+            self._loop.add_reader(self._serial.fileno(), self._read_ready)
+            self._has_reader = True
+
+    def _remove_reader(self):
+        if self._has_reader:
+            self._loop.remove_reader(self._serial.fileno())
+            self._has_reader = False
+
+
+    def _remove_writer(self):
+        if self._has_writer:
+            self._loop.remove_writer(self._serial.fileno())
+            self._has_writer = False
 
     def pause_reading(self):
         self._remove_reader()
